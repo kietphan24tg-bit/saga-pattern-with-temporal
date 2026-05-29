@@ -1,34 +1,62 @@
-export async function orderSagaWorkflow(input: OrderSagaInput) {
-    let orderId: string | null = null;
-    let reservationIds: string[] = [];
+import {
+  OrderSagaInput,
+  SagaExecutionResult,
+  SagaStatus,
+} from '../orders/orders.types';
+import { proxyActivities } from '@temporalio/workflow';
+import type { OrderSagaActivities } from './order-saga.activities';
 
-    try {
-        // Step 1: Create the order record
-        orderId = await createOrder(input);
+const activities = proxyActivities<OrderSagaActivities>({
+  startToCloseTimeout: '1 minute',
+});
 
-        // Step 2: Reserve the items in inventory
-        reservationIds = await reserveInventory({
-            orderId,
-            items: input.items
-        });
+export async function orderSagaWorkflow(
+  input: OrderSagaInput,
+  workflowId: string,
+): Promise<SagaExecutionResult> {
+  let orderId: string | null = null;
+  let reservationIds: string[] = [];
 
-        // Step 3: Process the payment
-        await processPayment({ orderId, amount: input.totalAmount });
+  try {
+    orderId = await activities.createOrder({
+      ...input,
+      sagaId: workflowId,
+    });
 
-        // If we get here, everything succeeded
-        return { orderId, status: 'CONFIRMED' };
-    } catch (error) {
-        // Something failed, we must compensate
-        console.log('Saga failed, starting compensation');
+    reservationIds = await activities.reserveInventory({
+      orderId,
+      items: input.items,
+    });
 
-        // Compensate in reverse order
-        if (reservationIds.length > 0) {
-            await releaseInventory({ reservationIds });
-        }
-        if (orderId) {
-            await cancelOrder({ orderId });
-        }
+    await activities.processPayment({
+      orderId,
+      amount: input.totalAmount,
+    });
 
-        return { orderId, status: 'FAILED', failureReason: error.message };
+    await activities.confirmOrder({ orderId });
+
+    return {
+      workflowId,
+      orderId,
+      status: SagaStatus.CONFIRMED,
+    };
+  } catch (error) {
+    if (reservationIds.length > 0) {
+      await activities.releaseInventory({ reservationIds });
     }
+
+    if (orderId) {
+      await activities.cancelOrder({ orderId });
+    }
+
+    const failureReason =
+      error instanceof Error ? error.message : 'Unknown saga failure';
+
+    return {
+      workflowId,
+      orderId,
+      status: SagaStatus.FAILED,
+      failureReason,
+    };
+  }
 }
