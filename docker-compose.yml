@@ -1,0 +1,20 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: orders_db
+    ports:
+      - "5432:5432"
+  mongodb:
+    image: mongo:6
+    ports:
+      - "27017:27017"
+  temporal:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"
+  temporal-ui:
+    image: temporalio/ui:latest
+    ports:
+      - "8080:8080"
